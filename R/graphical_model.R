@@ -98,8 +98,8 @@
 #'   number generator is set to \code{seed}.
 #'
 #'   For parallelisation, stability selection with different sets of parameters
-#'   can be run on \code{n_cores} cores. This relies on forking with
-#'   \code{\link[parallel]{mclapply}} (specific to Unix systems). Alternatively,
+#'   can be run on \code{n_cores} cores. Using \code{n_cores > 1} creates a
+#'   \code{\link[future]{multisession}}. Alternatively,
 #'   the function can be run manually with different \code{seed}s and all other
 #'   parameters equal. The results can then be combined using
 #'   \code{\link{Combine}}.
@@ -231,7 +231,7 @@
 #'   ShrinkageSelection <- function(xdata, Lambda, ...) {
 #'     mypcor <- corpcor::pcor.shrink(xdata, verbose = FALSE)
 #'     adjacency <- array(NA, dim = c(nrow(mypcor), ncol(mypcor), nrow(Lambda)))
-#'     for (k in 1:nrow(Lambda)) {
+#'     for (k in seq_len(nrow(Lambda))) {
 #'       A <- ifelse(abs(mypcor) >= Lambda[k, 1], yes = 1, no = 0)
 #'       diag(A) <- 0
 #'       adjacency[, , k] <- A
@@ -299,31 +299,33 @@ GraphicalModel <- function(xdata, pk = NULL, Lambda = NULL, lambda_other_blocks 
     )
   }
 
-  # Check if parallelisation is possible (forking)
-  if (.Platform$OS.type != "unix") {
-    if (n_cores > 1) {
-      warning("Invalid input for argument 'n_cores'. Parallelisation relies on forking, it is only available on Unix systems.")
-    }
-    n_cores <- 1
-  }
-
   # Stability selection and score
-  mypar <- parallel::mclapply(X = 1:n_cores, FUN = function(k) {
-    return(SerialGraphical(
-      xdata = xdata, pk = pk, Lambda = Lambda, lambda_other_blocks = lambda_other_blocks,
-      pi_list = pi_list, K = ceiling(K / n_cores), tau = tau, seed = as.numeric(paste0(seed, k)), n_cat = n_cat,
-      implementation = implementation, start = start, scale = scale,
-      resampling = resampling, cpss = cpss, PFER_method = PFER_method, PFER_thr = PFER_thr, FDP_thr = FDP_thr,
-      output_data = output_data, verbose = verbose, ...
-    ))
-  })
-
-  # Combining the outputs from parallel iterations
-  out <- mypar[[1]]
   if (n_cores > 1) {
+    future::plan(future::multisession, workers = n_cores)
+    mypar <- future.apply::future_lapply(X = seq_len(n_cores), future.seed = TRUE, FUN = function(k) {
+      return(SerialGraphical(
+        xdata = xdata, pk = pk, Lambda = Lambda, lambda_other_blocks = lambda_other_blocks,
+        pi_list = pi_list, K = ceiling(K / n_cores), tau = tau, seed = as.numeric(paste0(seed, k)), n_cat = n_cat,
+        implementation = implementation, start = start, scale = scale,
+        resampling = resampling, cpss = cpss, PFER_method = PFER_method, PFER_thr = PFER_thr, FDP_thr = FDP_thr,
+        output_data = output_data, verbose = FALSE, ...
+      ))
+    })
+    future::plan(future::sequential)
+
+    # Combining the outputs from parallel iterations
+    out <- mypar[[1]]
     for (i in 2:length(mypar)) {
       out <- do.call(Combine, list(stability1 = out, stability2 = mypar[[i]]))
     }
+  } else {
+    out <- SerialGraphical(
+      xdata = xdata, pk = pk, Lambda = Lambda, lambda_other_blocks = lambda_other_blocks,
+      pi_list = pi_list, K = K, tau = tau, seed = seed, n_cat = n_cat,
+      implementation = implementation, start = start, scale = scale,
+      resampling = resampling, cpss = cpss, PFER_method = PFER_method, PFER_thr = PFER_thr, FDP_thr = FDP_thr,
+      output_data = output_data, verbose = verbose, ...
+    )
   }
 
   # Re-set the function names
@@ -432,7 +434,7 @@ SerialGraphical <- function(xdata, pk = NULL, Lambda, lambda_other_blocks = 0.1,
   # Creating matrix with block indices
   bigblocks <- BlockMatrix(pk)
   nblocks <- length(pk) * (length(pk) + 1) / 2
-  bigblocks_vect <- factor(bigblocks[upper.tri(bigblocks)], levels = 1:nblocks)
+  bigblocks_vect <- factor(bigblocks[upper.tri(bigblocks)], levels = seq_len(nblocks))
   N_blocks <- unname(table(bigblocks_vect))
   blocks <- levels(bigblocks_vect)
   names(N_blocks) <- blocks
@@ -481,7 +483,7 @@ SerialGraphical <- function(xdata, pk = NULL, Lambda, lambda_other_blocks = 0.1,
 
   # Using MB formula of the PFER
   if (!cpss) {
-    for (i in 1:K) {
+    for (i in seq_len(K)) {
       # Resampling of the data
       s <- Resample(data = xdata, family = NULL, tau = tau, resampling = resampling, ...)
       xdata_sub <- xdata[s, , drop = FALSE]
@@ -493,7 +495,7 @@ SerialGraphical <- function(xdata, pk = NULL, Lambda, lambda_other_blocks = 0.1,
       )
 
       # Computing the selection counts
-      for (k in 1:dim(A)[3]) {
+      for (k in seq_len(dim(A)[3])) {
         bigstab[, , k] <- bigstab[, , k] + A[, , k]
       }
 
@@ -502,12 +504,12 @@ SerialGraphical <- function(xdata, pk = NULL, Lambda, lambda_other_blocks = 0.1,
       }
     }
     # Getting selection proportions from selection counts
-    for (k in 1:dim(bigstab)[3]) {
+    for (k in seq_len(dim(bigstab)[3])) {
       bigstab[, , k] <- bigstab[, , k] / K
       diag(bigstab[, , k]) <- 0
     }
   } else {
-    for (i in 1:ceiling(K / 2)) {
+    for (i in seq_len(ceiling(K / 2))) {
       # Sample 1
       s <- Resample(data = xdata, family = NULL, tau = tau, resampling = resampling, ...)
       xdata_sub <- xdata[s, , drop = FALSE]
@@ -528,7 +530,7 @@ SerialGraphical <- function(xdata, pk = NULL, Lambda, lambda_other_blocks = 0.1,
       )
 
       # Computing the simultaneous selection counts
-      for (k in 1:dim(A1)[3]) {
+      for (k in seq_len(dim(A1)[3])) {
         A <- ifelse((A1[, , k] + A2[, , k]) == 2, yes = 1, no = 0)
         bigstab[, , k] <- bigstab[, , k] + A
       }
@@ -538,7 +540,7 @@ SerialGraphical <- function(xdata, pk = NULL, Lambda, lambda_other_blocks = 0.1,
       }
     }
     # Getting selection proportions from selection counts
-    for (k in 1:dim(bigstab)[3]) {
+    for (k in seq_len(dim(bigstab)[3])) {
       bigstab[, , k] <- bigstab[, , k] / ceiling(K / 2)
       diag(bigstab[, , k]) <- 0
     }
