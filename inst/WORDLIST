@@ -1,5 +1,6 @@
 ARI
 Bühlmann
+CMD
 COSA
 CPSS
 Chadeau
@@ -52,6 +53,7 @@ Tibshirani
 VariableSelection
 Vuckovic
 Zou
+btad
 centering
 coef
 doi
@@ -64,6 +66,7 @@ igraph
 jrsssc
 lmax
 lmin
+nloptr
 nonzero
 pk
 qlad
